@@ -639,7 +639,7 @@ ${SED_INLINE} 's/static atomic_int av_log_level/__thread atomic_int av_log_level
   --disable-xmm-clobber-test \
   ${DEBUG_OPTIONS} \
   --disable-neon-clobber-test \
-  --disable-programs \
+  ${MNEMOVI_PROGRAMS:---disable-programs} \
   --disable-doc \
   --disable-htmlpages \
   --disable-manpages \
@@ -702,4 +702,26 @@ if [ $? -eq 0 ]; then
   echo "ok"
 else
   exit 1
+fi
+
+# --- MnemoVi: extract the standalone LGPL ffmpeg/ffprobe CLI -----------------
+# Upstream ffmpeg-kit builds libraries only (--disable-programs). MnemoVi needs
+# the ffmpeg/ffprobe EXECUTABLES as signed subprocess sidecars, so when
+# MNEMOVI_PROGRAMS re-enabled them above we copy them out here. GPL is never
+# built (no --enable-gpl; --full excludes x264/x265/xvid/vidstab/rubberband) and
+# --enable-version3 is set by the configure above → the binaries are LGPL-3.0.
+# The CI (.github/workflows/mnemovi-lgpl-cli.yml) then verifies + signs them.
+if [[ -n "${MNEMOVI_PROGRAMS:-}" ]]; then
+  MNEMOVI_OUT="${BASEDIR}/prebuilt/mnemovi-cli/${TARGET_ARCH}"
+  mkdir -p "${MNEMOVI_OUT}"
+  for prog in ffmpeg ffprobe; do
+    if [[ -f "${BASEDIR}/src/${LIB_NAME}/${prog}" ]]; then
+      cp "${BASEDIR}/src/${LIB_NAME}/${prog}" "${MNEMOVI_OUT}/${prog}"
+    else
+      echo -e "\n(*) [MnemoVi] expected ${prog} not found after build\n"
+      exit 1
+    fi
+  done
+  echo -e "\nINFO: [MnemoVi] CLI binaries at ${MNEMOVI_OUT}\n"
+  otool -L "${MNEMOVI_OUT}/ffmpeg" || true
 fi

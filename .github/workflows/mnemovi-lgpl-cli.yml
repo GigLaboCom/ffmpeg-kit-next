@@ -1,0 +1,112 @@
+name: MnemoVi LGPL ffmpeg/ffprobe CLI (macOS arm64)
+
+# Builds standalone LGPL-3.0 ffmpeg + ffprobe CLI binaries for MnemoVi.
+# Free on public repos: standard macos-14 (Apple-silicon/arm64) runner, no
+# minutes billed. GPL is never built (no --enable-gpl; --full excludes
+# x264/x265/xvid/vidstab/rubberband). The Releases page these produce is the
+# LGPL source-availability offer.
+
+on:
+  workflow_dispatch: {}
+  push:
+    tags:
+      - "mnemovi-cli-v*"      # e.g. mnemovi-cli-v8.1.0 -> a published Release
+
+permissions:
+  contents: write             # attach binaries to a Release on tag
+
+jobs:
+  macos-arm64:
+    runs-on: macos-14         # Apple silicon; arm64 native, no Intel lane
+    timeout-minutes: 350      # full non-GPL lib stack + ffmpeg from source
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0      # kit-next derives its version from git describe
+
+      - name: Install Nix
+        uses: DeterminateSystems/nix-installer-action@main
+        with:
+          extra-conf: |
+            experimental-features = nix-command flakes
+
+      - name: Build LGPL ffmpeg/ffprobe CLI (--full, no GPL)
+        env:
+          # Re-enables the CLI programs our fork patch gated behind this var
+          # (upstream builds --disable-programs / libraries only). ffplay off:
+          # no SDL, and MnemoVi never uses it.
+          MNEMOVI_PROGRAMS: "--enable-ffmpeg --enable-ffprobe --disable-ffplay"
+        run: |
+          ./nix-macos.sh -p xcode26 --full --jobs=3
+          echo "OUT=$PWD/prebuilt/mnemovi-cli/arm64" >>"$GITHUB_ENV"
+
+      - name: Verify LGPL (ship-gate gates — hard fail)
+        run: |
+          set -euo pipefail
+          FF="$OUT/ffmpeg"
+          test -x "$FF" || { echo "::error::ffmpeg CLI not produced"; exit 1; }
+          cfg="$("$FF" -hide_banner -version)"
+          echo "$cfg"
+          echo "$cfg" | grep -q -- "--enable-version3"        || { echo "::error::missing --enable-version3"; exit 1; }
+          echo "$cfg" | grep -q -- "--enable-gpl"             && { echo "::error::GPL build detected"; exit 1; } || true
+          echo "$cfg" | grep -Eq -- "--enable-(nonfree|libx264|libx265|libxvid|libvidstab)" \
+            && { echo "::error::GPL/nonfree library present"; exit 1; } || true
+          # License line must read LGPL v3
+          "$FF" -hide_banner -L 2>/dev/null | grep -qi "GNU Lesser General Public License version 3" \
+            || "$FF" -version 2>/dev/null | grep -qi "LGPL version 3" \
+            || { echo "::error::license line is not LGPL version 3"; exit 1; }
+          echo "LGPL gates passed."
+
+      - name: Self-containment report + gate (otool)
+        run: |
+          set -euo pipefail
+          for b in ffmpeg ffprobe; do
+            echo "== otool -L $b =="
+            otool -L "$OUT/$b"
+            # A shippable sidecar must reference only system libraries.
+            nonsys="$(otool -L "$OUT/$b" | tail -n +2 | awk '{print $1}' \
+              | grep -Ev '^/usr/lib/|^/System/' || true)"
+            if [ -n "$nonsys" ]; then
+              echo "::error::$b links non-system dylibs (not self-contained):"
+              echo "$nonsys"
+              echo "Follow-up: switch the CLI to a static final link (--enable-static --disable-shared --pkg-config-flags=--static) or stage+sign these dylibs."
+              exit 1
+            fi
+          done
+          echo "Both binaries are self-contained (system dylibs only)."
+
+      - name: Provenance manifest
+        run: |
+          set -euo pipefail
+          {
+            echo "upstream: arthenica/ffmpeg-kit-next"
+            echo "fork_ref: $GITHUB_SHA"
+            echo "kit_next_version: $(git describe --tags --always)"
+            echo "profile: xcode26   build: --full (all non-GPL)  MNEMOVI_PROGRAMS=$MNEMOVI_PROGRAMS"
+            echo "ffmpeg_version_line: $("$OUT/ffmpeg" -hide_banner -version | head -1)"
+            echo "sha256:"
+            shasum -a 256 "$OUT/ffmpeg" "$OUT/ffprobe"
+          } | tee "$OUT/PROVENANCE.txt"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mnemovi-ffmpeg-lgpl-macos-arm64
+          path: |
+            ${{ env.OUT }}/ffmpeg
+            ${{ env.OUT }}/ffprobe
+            ${{ env.OUT }}/PROVENANCE.txt
+          if-no-files-found: error
+
+      - name: Publish Release (tag builds only)
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            ${{ env.OUT }}/ffmpeg
+            ${{ env.OUT }}/ffprobe
+            ${{ env.OUT }}/PROVENANCE.txt
+          body: |
+            LGPL-3.0 ffmpeg/ffprobe CLI for MnemoVi (macOS arm64).
+            Built from a fork of arthenica/ffmpeg-kit-next, `--full` (all non-GPL
+            libraries), `--enable-version3`, no `--enable-gpl`. This page is the
+            LGPL source-availability offer.
