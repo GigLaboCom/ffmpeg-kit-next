@@ -134,6 +134,9 @@
         python3
         perl
         ruby
+        autogen   # MnemoVi: libsndfile generates its test sources with GNU
+                  # AutoGen; present in the Android shell but not the macOS one,
+                  # so the macos `--full` build died on "autogen: command not found".
       ];
 
       commonPackages = pkgs: commonToolPackages pkgs ++ pkgConfigPackages pkgs;
