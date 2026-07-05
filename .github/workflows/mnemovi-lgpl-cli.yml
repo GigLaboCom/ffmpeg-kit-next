@@ -74,11 +74,10 @@ jobs:
         run: |
           # --no-output-redirection: kit-next otherwise sends each lib's build
           # output to build.log, hiding the real error behind "<lib>: failed".
-          # --skip-openssl: --full enables both gnutls AND openssl, but ffmpeg
-          # forbids both TLS backends at once ("GnuTLS and OpenSSL must not be
-          # enabled at the same time"). Keep gnutls (LGPL), drop openssl. MnemoVi
-          # uses no TLS in ffmpeg anyway.
-          ./nix-macos.sh -p xcode26 --full ${{ matrix.disable }} --skip-openssl --jobs=3 --no-output-redirection
+          # ffmpeg forbids gnutls+openssl together; our ffmpeg.sh patch makes
+          # ffmpeg use gnutls and pass --disable-openssl (openssl still builds
+          # because other --full libs depend on it). MnemoVi uses no TLS anyway.
+          ./nix-macos.sh -p xcode26 --full ${{ matrix.disable }} --jobs=3 --no-output-redirection
           echo "OUT=$PWD/prebuilt/mnemovi-cli/${{ matrix.arch }}" >>"$GITHUB_ENV"
 
       - name: Upload build.log on failure

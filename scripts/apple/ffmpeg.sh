@@ -285,9 +285,10 @@ for library in {0..61} ${LIBRARY_VVENC} ${LIBRARY_LIBSVTAV1} ${LIBRARY_LIBJXL} $
       CONFIGURE_POSTFIX+=" --enable-libopenh264"
       ;;
     openssl)
-      FFMPEG_CFLAGS+=" $(pkg-config --cflags openssl 2>>"${BASEDIR}"/build.log)"
-      FFMPEG_LDFLAGS+=" $(pkg-config --libs --static openssl 2>>"${BASEDIR}"/build.log)"
-      CONFIGURE_POSTFIX+=" --enable-openssl"
+      # MnemoVi: ffmpeg forbids GnuTLS + OpenSSL together and we use GnuTLS.
+      # openssl is still built (other --full libs depend on it and re-enable it
+      # even with --skip-openssl), but ffmpeg must NOT enable it as a TLS backend.
+      CONFIGURE_POSTFIX+=" --disable-openssl"
       ;;
     opus)
       FFMPEG_CFLAGS+=" $(pkg-config --cflags opus 2>>"${BASEDIR}"/build.log)"
