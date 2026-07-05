@@ -76,6 +76,13 @@
         export MESON="${pkgs.meson}/bin/meson"
         export SED="${pkgs.gnused}/bin/sed"
 
+        # MnemoVi: on Darwin, several autotools libs (freetype, ...) call
+        # `glibtoolize` (the macOS name for GNU libtoolize); nix's libtool ships
+        # it only as `libtoolize`. Expose a glibtoolize alias on PATH.
+        _mnemovi_tools="$(mktemp -d)"
+        ln -sf "${pkgs.libtool}/bin/libtoolize" "$_mnemovi_tools/glibtoolize"
+        export PATH="$_mnemovi_tools:$PATH"
+
         export FFMPEG_KIT_NIX_HOST_SDKROOT="''${SDKROOT-}"
         unset SDKROOT
         unset MACOSX_DEPLOYMENT_TARGET
@@ -134,9 +141,11 @@
         python3
         perl
         ruby
-        autogen   # MnemoVi: libsndfile generates its test sources with GNU
-                  # AutoGen; present in the Android shell but not the macOS one,
-                  # so the macos `--full` build died on "autogen: command not found".
+        # MnemoVi: build-time generators/tools present in kit-next's Android
+        # shell but missing from the leaner macOS one, needed by --full libs:
+        autogen   # libsndfile test-source generation
+        ragel     # harfbuzz lexer generation
+        texinfo   # makeinfo — gnutls/nettle/gmp docs during build
       ];
 
       commonPackages = pkgs: commonToolPackages pkgs ++ pkgConfigPackages pkgs;
