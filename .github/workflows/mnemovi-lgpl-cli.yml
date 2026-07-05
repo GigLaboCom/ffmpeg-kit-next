@@ -1,10 +1,11 @@
-name: MnemoVi LGPL ffmpeg/ffprobe CLI (macOS arm64)
+name: MnemoVi LGPL ffmpeg/ffprobe CLI (macOS)
 
-# Builds standalone LGPL-3.0 ffmpeg + ffprobe CLI binaries for MnemoVi.
-# Free on public repos: standard macos-14 (Apple-silicon/arm64) runner, no
-# minutes billed. GPL is never built (no --enable-gpl; --full excludes
-# x264/x265/xvid/vidstab/rubberband). The Releases page these produce is the
-# LGPL source-availability offer.
+# Builds standalone LGPL-3.0 ffmpeg + ffprobe CLI for MnemoVi, BOTH macOS arches
+# (arm64 + x86_64), each as its own job. Free on public repos: standard macos-15
+# runners, no minutes billed. GPL is never built (no --enable-gpl; --full
+# excludes x264/x265/xvid/vidstab/rubberband). x86_64 is CROSS-compiled on the
+# arm64 runner, so its verify step installs Rosetta to run the binary.
+# The Releases page these produce is the LGPL source-availability offer.
 
 on:
   workflow_dispatch: {}
@@ -16,9 +17,20 @@ permissions:
   contents: write             # attach binaries to a Release on tag
 
 jobs:
-  macos-arm64:
-    runs-on: macos-15         # Apple silicon; arm64 native, no Intel lane
+  build:
+    name: ${{ matrix.arch }}
+    runs-on: macos-15         # Apple silicon runner (arm64 host)
     timeout-minutes: 350      # full non-GPL lib stack + ffmpeg from source
+    strategy:
+      fail-fast: false        # one arch failing must not kill the other
+      matrix:
+        include:
+          - arch: aarch64
+            disable: --disable-x86-64
+            lipo: arm64
+          - arch: x86_64
+            disable: --disable-arm64
+            lipo: x86_64
     steps:
       - uses: actions/checkout@v4
         with:
@@ -36,17 +48,19 @@ jobs:
             if [ "${v%%.*}" -ge 26 ] 2>/dev/null; then pick="$d"; pickv="$v"; break; fi
           done
           if [ -z "$pick" ]; then
-            echo "::error::No Xcode >= 26 on this runner. Switch runs-on to a macos image that ships Xcode 26 (e.g. macos-26)."
-            exit 1
+            echo "::error::No Xcode >= 26 on this runner (use a macos image that ships Xcode 26)."; exit 1
           fi
           echo "Using $pick (Xcode $pickv)"
           sudo xcode-select -s "$pick/Contents/Developer"
-          # the flake hardcodes /Applications/Xcode.app -> point it at the chosen Xcode
           if [ "$pick" != "/Applications/Xcode.app" ]; then
             sudo rm -rf /Applications/Xcode.app
             sudo ln -s "$pick" /Applications/Xcode.app
           fi
           /Applications/Xcode.app/Contents/Developer/usr/bin/xcodebuild -version
+
+      - name: Install Rosetta (to run the cross-compiled x86_64 binary in verify)
+        if: matrix.arch == 'x86_64'
+        run: sudo softwareupdate --install-rosetta --agree-to-license
 
       - name: Install Nix
         uses: DeterminateSystems/nix-installer-action@main
@@ -54,96 +68,77 @@ jobs:
           extra-conf: |
             experimental-features = nix-command flakes
 
-      - name: Build LGPL ffmpeg/ffprobe CLI (--full, no GPL)
+      - name: Build LGPL ffmpeg/ffprobe CLI (--full, no GPL, ${{ matrix.arch }})
         env:
-          # Re-enables the CLI programs our fork patch gated behind this var
-          # (upstream builds --disable-programs / libraries only). ffplay off:
-          # no SDL, and MnemoVi never uses it.
           MNEMOVI_PROGRAMS: "--enable-ffmpeg --enable-ffprobe --disable-ffplay"
         run: |
-          # --disable-x86-64: kit-next builds arm64 + x86_64 by default; MnemoVi
-          # is arm64-only (no Intel lane), and the Intel cross-compile is both
-          # wasted work and the likely libsndfile failure. Build arm64 only.
           # --no-output-redirection: kit-next otherwise sends each lib's build
           # output to build.log, hiding the real error behind "<lib>: failed".
-          ./nix-macos.sh -p xcode26 --full --disable-x86-64 --jobs=3 --no-output-redirection
-          echo "OUT=$PWD/prebuilt/mnemovi-cli/aarch64" >>"$GITHUB_ENV"
+          ./nix-macos.sh -p xcode26 --full ${{ matrix.disable }} --jobs=3 --no-output-redirection
+          echo "OUT=$PWD/prebuilt/mnemovi-cli/${{ matrix.arch }}" >>"$GITHUB_ENV"
 
       - name: Upload build.log on failure
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: build-log
+          name: build-log-${{ matrix.arch }}
           path: build.log
           if-no-files-found: ignore
 
-      - name: Verify LGPL (ship-gate gates — hard fail)
+      - name: Verify — arch, LGPL, self-containment (hard fail)
         run: |
           set -euo pipefail
-          FF="$OUT/ffmpeg"
-          test -x "$FF" || { echo "::error::ffmpeg CLI not produced"; exit 1; }
-          cfg="$("$FF" -hide_banner -version)"
+          for b in ffmpeg ffprobe; do
+            F="$OUT/$b"
+            test -x "$F" || { echo "::error::$b not produced"; exit 1; }
+            lipo -archs "$F" | tr ' ' '\n' | grep -qx "${{ matrix.lipo }}" \
+              || { echo "::error::$b is not ${{ matrix.lipo }}: $(lipo -archs "$F")"; exit 1; }
+          done
+          cfg="$("$OUT/ffmpeg" -hide_banner -version)"
           echo "$cfg"
           echo "$cfg" | grep -q -- "--enable-version3"        || { echo "::error::missing --enable-version3"; exit 1; }
           echo "$cfg" | grep -q -- "--enable-gpl"             && { echo "::error::GPL build detected"; exit 1; } || true
           echo "$cfg" | grep -Eq -- "--enable-(nonfree|libx264|libx265|libxvid|libvidstab)" \
             && { echo "::error::GPL/nonfree library present"; exit 1; } || true
-          # License line must read LGPL v3
-          "$FF" -hide_banner -L 2>/dev/null | grep -qi "GNU Lesser General Public License version 3" \
-            || "$FF" -version 2>/dev/null | grep -qi "LGPL version 3" \
+          "$OUT/ffmpeg" -version 2>/dev/null | grep -qi "LGPL version 3" \
             || { echo "::error::license line is not LGPL version 3"; exit 1; }
-          echo "LGPL gates passed."
-
-      - name: Self-containment report + gate (otool)
-        run: |
-          set -euo pipefail
           for b in ffmpeg ffprobe; do
-            echo "== otool -L $b =="
-            otool -L "$OUT/$b"
-            # A shippable sidecar must reference only system libraries.
-            nonsys="$(otool -L "$OUT/$b" | tail -n +2 | awk '{print $1}' \
-              | grep -Ev '^/usr/lib/|^/System/' || true)"
+            nonsys="$(otool -L "$OUT/$b" | tail -n +2 | awk '{print $1}' | grep -Ev '^/usr/lib/|^/System/' || true)"
             if [ -n "$nonsys" ]; then
-              echo "::error::$b links non-system dylibs (not self-contained):"
-              echo "$nonsys"
-              echo "Follow-up: switch the CLI to a static final link (--enable-static --disable-shared --pkg-config-flags=--static) or stage+sign these dylibs."
-              exit 1
+              echo "::error::$b links non-system dylibs (not self-contained):"; echo "$nonsys"; exit 1
             fi
           done
-          echo "Both binaries are self-contained (system dylibs only)."
+          echo "LGPL + self-contained OK (${{ matrix.arch }})."
 
-      - name: Provenance manifest
+      - name: Stage arch-named release assets + provenance
         run: |
           set -euo pipefail
+          mkdir -p out
+          cp "$OUT/ffmpeg"  "out/ffmpeg-${{ matrix.arch }}"
+          cp "$OUT/ffprobe" "out/ffprobe-${{ matrix.arch }}"
           {
             echo "upstream: arthenica/ffmpeg-kit-next"
             echo "fork_ref: $GITHUB_SHA"
             echo "kit_next_version: $(git describe --tags --always)"
-            echo "profile: xcode26   build: --full (all non-GPL)  MNEMOVI_PROGRAMS=$MNEMOVI_PROGRAMS"
+            echo "arch: ${{ matrix.arch }}   profile: xcode26   build: --full ${{ matrix.disable }}"
             echo "ffmpeg_version_line: $("$OUT/ffmpeg" -hide_banner -version | head -1)"
-            echo "sha256:"
-            shasum -a 256 "$OUT/ffmpeg" "$OUT/ffprobe"
-          } | tee "$OUT/PROVENANCE.txt"
+            shasum -a 256 "out/ffmpeg-${{ matrix.arch }}" "out/ffprobe-${{ matrix.arch }}"
+          } | tee "out/PROVENANCE-${{ matrix.arch }}.txt"
 
       - uses: actions/upload-artifact@v4
         with:
-          name: mnemovi-ffmpeg-lgpl-macos-arm64
-          path: |
-            ${{ env.OUT }}/ffmpeg
-            ${{ env.OUT }}/ffprobe
-            ${{ env.OUT }}/PROVENANCE.txt
+          name: mnemovi-ffmpeg-lgpl-macos-${{ matrix.arch }}
+          path: out/*
           if-no-files-found: error
 
       - name: Publish Release (tag builds only)
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
-          files: |
-            ${{ env.OUT }}/ffmpeg
-            ${{ env.OUT }}/ffprobe
-            ${{ env.OUT }}/PROVENANCE.txt
+          files: out/*
           body: |
-            LGPL-3.0 ffmpeg/ffprobe CLI for MnemoVi (macOS arm64).
+            LGPL-3.0 ffmpeg/ffprobe CLI for MnemoVi (macOS arm64 + x86_64).
             Built from a fork of arthenica/ffmpeg-kit-next, `--full` (all non-GPL
-            libraries), `--enable-version3`, no `--enable-gpl`. This page is the
-            LGPL source-availability offer.
+            libraries), `--enable-version3`, no `--enable-gpl`. Assets are
+            arch-suffixed (ffmpeg-aarch64 / ffmpeg-x86_64). This page is the LGPL
+            source-availability offer.
