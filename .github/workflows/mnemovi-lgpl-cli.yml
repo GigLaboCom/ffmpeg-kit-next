@@ -97,14 +97,17 @@ jobs:
             lipo -archs "$F" | tr ' ' '\n' | grep -qx "${{ matrix.lipo }}" \
               || { echo "::error::$b is not ${{ matrix.lipo }}: $(lipo -archs "$F")"; exit 1; }
           done
+          # LGPL-3.0 proof = the configuration flags (ffmpeg -version has NO
+          # separate license line; "License: LGPL version 3" only appears in
+          # ./configure output). version3 + no gpl + no nonfree/x264/x265/xvid
+          # is authoritative and equivalent to the configure "LGPL version 3".
           cfg="$("$OUT/ffmpeg" -hide_banner -version)"
           echo "$cfg"
           echo "$cfg" | grep -q -- "--enable-version3"        || { echo "::error::missing --enable-version3"; exit 1; }
           echo "$cfg" | grep -q -- "--enable-gpl"             && { echo "::error::GPL build detected"; exit 1; } || true
           echo "$cfg" | grep -Eq -- "--enable-(nonfree|libx264|libx265|libxvid|libvidstab)" \
             && { echo "::error::GPL/nonfree library present"; exit 1; } || true
-          "$OUT/ffmpeg" -version 2>/dev/null | grep -qi "LGPL version 3" \
-            || { echo "::error::license line is not LGPL version 3"; exit 1; }
+          echo "LGPL-3.0 confirmed (--enable-version3, no --enable-gpl/nonfree/x264/x265/xvid)."
           for b in ffmpeg ffprobe; do
             nonsys="$(otool -L "$OUT/$b" | tail -n +2 | awk '{print $1}' | grep -Ev '^/usr/lib/|^/System/' || true)"
             if [ -n "$nonsys" ]; then
