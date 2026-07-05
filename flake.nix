@@ -146,6 +146,9 @@
         autogen   # libsndfile test-source generation
         ragel     # harfbuzz lexer generation
         texinfo   # makeinfo — gnutls/nettle/gmp docs during build
+        gtk-doc   # gtkdocize — gnutls bootstrap
+        doxygen   # docs some libs generate at build time
+        libtasn1  # asn1 tooling in the gnutls stack
       ];
 
       commonPackages = pkgs: commonToolPackages pkgs ++ pkgConfigPackages pkgs;
