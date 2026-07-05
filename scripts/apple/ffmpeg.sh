@@ -515,6 +515,14 @@ fi
 # ALWAYS BUILD SHARED LIBRARIES
 BUILD_LIBRARY_OPTIONS="--enable-shared --disable-static --install-name-dir=@rpath"
 
+# MnemoVi CLI mode: build ffmpeg STATIC so the standalone ffmpeg/ffprobe
+# executables bake libav* in and link the (static) external libs directly ->
+# self-contained (system dylibs only), which a signed/notarized sidecar needs.
+# The framework packaging below is skipped in this mode (see MNEMOVI_PROGRAMS).
+if [[ -n "${MNEMOVI_PROGRAMS:-}" ]]; then
+  BUILD_LIBRARY_OPTIONS="--enable-static --disable-shared --pkg-config-flags=--static"
+fi
+
 # OPTIMIZE FOR SPEED INSTEAD OF SIZE
 if [[ -z ${FFMPEG_KIT_OPTIMIZED_FOR_SPEED} ]]; then
   SIZE_OPTIONS="--enable-small"
@@ -666,62 +674,64 @@ if [[ $? -ne 0 ]]; then
   exit 1
 fi
 
-${SED_INLINE} 's|$(SLIBNAME_WITH_MAJOR),|$(SLIBPREF)$(FULLNAME).framework/$(SLIBPREF)$(FULLNAME),|g' ${BASEDIR}/src/ffmpeg/ffbuild/config.mak 1>>"${BASEDIR}"/build.log 2>&1 || return 1
-
-# BUILD DYNAMIC LIBRARIES WITH DEFAULT OPTIONS
-build_ffmpeg
-install_ffmpeg "true"
-
-# CLEAN THE OUTPUT OF FIRST BUILD
-find . -name "*.dylib" -delete 1>>"${BASEDIR}"/build.log 2>&1
-
-echo -e "\nShared libraries built successfully. Building frameworks.\n" 1>>"${BASEDIR}"/build.log 2>&1
-
-create_temporary_framework "libavcodec"
-create_temporary_framework "libavdevice"
-create_temporary_framework "libavfilter"
-create_temporary_framework "libavformat"
-create_temporary_framework "libavutil"
-create_temporary_framework "libswresample"
-create_temporary_framework "libswscale"
-
-${SED_INLINE} 's|$(SLIBNAME_WITH_MAJOR),|$(SLIBPREF)$(FULLNAME).framework/$(SLIBPREF)$(FULLNAME),|g' ${BASEDIR}/src/ffmpeg/ffbuild/config.mak 1>>"${BASEDIR}"/build.log 2>&1 || return 1
-${SED_INLINE} 's|$(LD_LIB)|-framework lib% |g' ${BASEDIR}/src/ffmpeg/ffbuild/common.mak 1>>"${BASEDIR}"/build.log 2>&1 || return 1
-${SED_INLINE} "s|\$(LD_PATH)lib%|-F ${FFMPEG_LIBRARY_PATH}/framework|g" ${BASEDIR}/src/ffmpeg/ffbuild/common.mak 1>>"${BASEDIR}"/build.log 2>&1 || return 1
-
-# BUILD FRAMEWORKS AS DYNAMIC LIBRARIES
-build_ffmpeg
-install_ffmpeg
-
-# MANUALLY ADD REQUIRED HEADERS
-mkdir -p "${FFMPEG_LIBRARY_PATH}"/include 1>>"${BASEDIR}"/build.log 2>&1
-overwrite_file "${BASEDIR}"/src/ffmpeg/config.h "${FFMPEG_LIBRARY_PATH}"/include/config.h 1>>"${BASEDIR}"/build.log 2>&1
-rsync -am --include='*.h' --include='*/' --exclude='*' "${BASEDIR}"/src/ffmpeg/ "${FFMPEG_LIBRARY_PATH}"/include/ 1>>"${BASEDIR}"/build.log 2>&1
-
-if [ $? -eq 0 ]; then
-  echo "ok"
-else
-  exit 1
-fi
-
-# --- MnemoVi: extract the standalone LGPL ffmpeg/ffprobe CLI -----------------
-# Upstream ffmpeg-kit builds libraries only (--disable-programs). MnemoVi needs
-# the ffmpeg/ffprobe EXECUTABLES as signed subprocess sidecars, so when
-# MNEMOVI_PROGRAMS re-enabled them above we copy them out here. GPL is never
-# built (no --enable-gpl; --full excludes x264/x265/xvid/vidstab/rubberband) and
-# --enable-version3 is set by the configure above → the binaries are LGPL-3.0.
-# The CI (.github/workflows/mnemovi-lgpl-cli.yml) then verifies + signs them.
 if [[ -n "${MNEMOVI_PROGRAMS:-}" ]]; then
+  # --- MnemoVi CLI-only path -------------------------------------------------
+  # ffmpeg was configured STATIC with programs enabled (see BUILD_LIBRARY_OPTIONS
+  # and MNEMOVI_PROGRAMS above). Build once and copy the self-contained
+  # ffmpeg/ffprobe out; the framework packaging below is intentionally skipped.
+  # LGPL-3.0: --enable-version3 set, no --enable-gpl (GPL libs never built).
+  build_ffmpeg
+
   MNEMOVI_OUT="${BASEDIR}/prebuilt/mnemovi-cli/${TARGET_ARCH}"
   mkdir -p "${MNEMOVI_OUT}"
   for prog in ffmpeg ffprobe; do
     if [[ -f "${BASEDIR}/src/${LIB_NAME}/${prog}" ]]; then
       cp "${BASEDIR}/src/${LIB_NAME}/${prog}" "${MNEMOVI_OUT}/${prog}"
+      "${STRIP}" "${MNEMOVI_OUT}/${prog}" 1>>"${BASEDIR}"/build.log 2>&1 || true
     else
       echo -e "\n(*) [MnemoVi] expected ${prog} not found after build\n"
       exit 1
     fi
   done
-  echo -e "\nINFO: [MnemoVi] CLI binaries at ${MNEMOVI_OUT}\n"
+  echo -e "\nINFO: [MnemoVi] self-contained CLI at ${MNEMOVI_OUT}\n"
   otool -L "${MNEMOVI_OUT}/ffmpeg" || true
+
+else
+  ${SED_INLINE} 's|$(SLIBNAME_WITH_MAJOR),|$(SLIBPREF)$(FULLNAME).framework/$(SLIBPREF)$(FULLNAME),|g' ${BASEDIR}/src/ffmpeg/ffbuild/config.mak 1>>"${BASEDIR}"/build.log 2>&1 || return 1
+
+  # BUILD DYNAMIC LIBRARIES WITH DEFAULT OPTIONS
+  build_ffmpeg
+  install_ffmpeg "true"
+
+  # CLEAN THE OUTPUT OF FIRST BUILD
+  find . -name "*.dylib" -delete 1>>"${BASEDIR}"/build.log 2>&1
+
+  echo -e "\nShared libraries built successfully. Building frameworks.\n" 1>>"${BASEDIR}"/build.log 2>&1
+
+  create_temporary_framework "libavcodec"
+  create_temporary_framework "libavdevice"
+  create_temporary_framework "libavfilter"
+  create_temporary_framework "libavformat"
+  create_temporary_framework "libavutil"
+  create_temporary_framework "libswresample"
+  create_temporary_framework "libswscale"
+
+  ${SED_INLINE} 's|$(SLIBNAME_WITH_MAJOR),|$(SLIBPREF)$(FULLNAME).framework/$(SLIBPREF)$(FULLNAME),|g' ${BASEDIR}/src/ffmpeg/ffbuild/config.mak 1>>"${BASEDIR}"/build.log 2>&1 || return 1
+  ${SED_INLINE} 's|$(LD_LIB)|-framework lib% |g' ${BASEDIR}/src/ffmpeg/ffbuild/common.mak 1>>"${BASEDIR}"/build.log 2>&1 || return 1
+  ${SED_INLINE} "s|\$(LD_PATH)lib%|-F ${FFMPEG_LIBRARY_PATH}/framework|g" ${BASEDIR}/src/ffmpeg/ffbuild/common.mak 1>>"${BASEDIR}"/build.log 2>&1 || return 1
+
+  # BUILD FRAMEWORKS AS DYNAMIC LIBRARIES
+  build_ffmpeg
+  install_ffmpeg
+
+  # MANUALLY ADD REQUIRED HEADERS
+  mkdir -p "${FFMPEG_LIBRARY_PATH}"/include 1>>"${BASEDIR}"/build.log 2>&1
+  overwrite_file "${BASEDIR}"/src/ffmpeg/config.h "${FFMPEG_LIBRARY_PATH}"/include/config.h 1>>"${BASEDIR}"/build.log 2>&1
+  rsync -am --include='*.h' --include='*/' --exclude='*' "${BASEDIR}"/src/ffmpeg/ "${FFMPEG_LIBRARY_PATH}"/include/ 1>>"${BASEDIR}"/build.log 2>&1
+
+  if [ $? -eq 0 ]; then
+    echo "ok"
+  else
+    exit 1
+  fi
 fi

@@ -18,11 +18,14 @@ executables** MnemoVi runs as signed subprocess sidecars. Upstream builds
 
 ## What this fork changes vs upstream
 
-1. `scripts/apple/ffmpeg.sh` — `--disable-programs` is replaced by
-   `${MNEMOVI_PROGRAMS:---disable-programs}`; set `MNEMOVI_PROGRAMS` to build
-   the CLI. A copy-out step stages the binaries to
-   `prebuilt/mnemovi-cli/<arch>/`. Upstream behaviour is unchanged when the var
-   is unset.
+1. `scripts/apple/ffmpeg.sh` — when `MNEMOVI_PROGRAMS` is set:
+   - `--disable-programs` becomes `${MNEMOVI_PROGRAMS}` (enables ffmpeg/ffprobe),
+   - ffmpeg is built **static** (`--enable-static --disable-shared`) instead of
+     shared frameworks, so the CLI is **self-contained** (kit-next's external
+     libs are already static),
+   - the framework-packaging path is skipped and the binaries are staged to
+     `prebuilt/mnemovi-cli/aarch64/`.
+   Upstream behaviour is unchanged when the var is unset.
 2. `.github/workflows/mnemovi-lgpl-cli.yml` — free `macos-14` (arm64) CI that
    builds, verifies LGPL + self-containment, and publishes the binaries as
    Release assets.
@@ -32,7 +35,7 @@ executables** MnemoVi runs as signed subprocess sidecars. Upstream builds
 ```bash
 MNEMOVI_PROGRAMS="--enable-ffmpeg --enable-ffprobe --disable-ffplay" \
   ./nix-macos.sh -p xcode26 --full --jobs=3
-# -> prebuilt/mnemovi-cli/arm64/{ffmpeg,ffprobe}
+# -> prebuilt/mnemovi-cli/aarch64/{ffmpeg,ffprobe}
 ```
 
 Then verify: `ffmpeg -version` must show `--enable-version3`, no `--enable-gpl`,

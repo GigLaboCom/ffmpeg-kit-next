@@ -38,7 +38,7 @@ jobs:
           MNEMOVI_PROGRAMS: "--enable-ffmpeg --enable-ffprobe --disable-ffplay"
         run: |
           ./nix-macos.sh -p xcode26 --full --jobs=3
-          echo "OUT=$PWD/prebuilt/mnemovi-cli/arm64" >>"$GITHUB_ENV"
+          echo "OUT=$PWD/prebuilt/mnemovi-cli/aarch64" >>"$GITHUB_ENV"
 
       - name: Verify LGPL (ship-gate gates — hard fail)
         run: |
