@@ -17,12 +17,36 @@ permissions:
 
 jobs:
   macos-arm64:
-    runs-on: macos-14         # Apple silicon; arm64 native, no Intel lane
+    runs-on: macos-15         # Apple silicon; arm64 native, no Intel lane
     timeout-minutes: 350      # full non-GPL lib stack + ffmpeg from source
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0      # kit-next derives its version from git describe
+
+      - name: Select Xcode 26 (kit-next's xcode26 profile requires it)
+        run: |
+          set -euo pipefail
+          echo "Installed Xcodes:"; ls -d /Applications/Xcode*.app 2>/dev/null || true
+          pick=""; pickv=""
+          for d in /Applications/Xcode_26*.app /Applications/Xcode-26*.app /Applications/Xcode*.app; do
+            [ -d "$d" ] || continue
+            v="$("$d/Contents/Developer/usr/bin/xcodebuild" -version 2>/dev/null | awk 'NR==1{print $2}')" || continue
+            case "$v" in ''|*[!0-9.]*) continue;; esac
+            if [ "${v%%.*}" -ge 26 ] 2>/dev/null; then pick="$d"; pickv="$v"; break; fi
+          done
+          if [ -z "$pick" ]; then
+            echo "::error::No Xcode >= 26 on this runner. Switch runs-on to a macos image that ships Xcode 26 (e.g. macos-26)."
+            exit 1
+          fi
+          echo "Using $pick (Xcode $pickv)"
+          sudo xcode-select -s "$pick/Contents/Developer"
+          # the flake hardcodes /Applications/Xcode.app -> point it at the chosen Xcode
+          if [ "$pick" != "/Applications/Xcode.app" ]; then
+            sudo rm -rf /Applications/Xcode.app
+            sudo ln -s "$pick" /Applications/Xcode.app
+          fi
+          /Applications/Xcode.app/Contents/Developer/usr/bin/xcodebuild -version
 
       - name: Install Nix
         uses: DeterminateSystems/nix-installer-action@main
