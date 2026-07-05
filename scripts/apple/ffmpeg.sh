@@ -697,6 +697,13 @@ if [[ -n "${MNEMOVI_PROGRAMS:-}" ]]; then
   echo -e "\nINFO: [MnemoVi] self-contained CLI at ${MNEMOVI_OUT}\n"
   otool -L "${MNEMOVI_OUT}/ffmpeg" || true
 
+  # We have the CLI binaries — that's all MnemoVi needs. Stop the ENTIRE build
+  # here (this file is sourced by main-macos.sh, itself sourced by start-macos.sh
+  # with no subshell), so kit-next never builds ffmpeg-kit or the frameworks/
+  # xcframeworks (which we skipped and which would fail). Exit 0 = build success,
+  # so the workflow proceeds to verify + publish the CLIs to the Release.
+  exit 0
+
 else
   ${SED_INLINE} 's|$(SLIBNAME_WITH_MAJOR),|$(SLIBPREF)$(FULLNAME).framework/$(SLIBPREF)$(FULLNAME),|g' ${BASEDIR}/src/ffmpeg/ffbuild/config.mak 1>>"${BASEDIR}"/build.log 2>&1 || return 1
 
