@@ -61,9 +61,12 @@ jobs:
           # no SDL, and MnemoVi never uses it.
           MNEMOVI_PROGRAMS: "--enable-ffmpeg --enable-ffprobe --disable-ffplay"
         run: |
+          # --disable-x86-64: kit-next builds arm64 + x86_64 by default; MnemoVi
+          # is arm64-only (no Intel lane), and the Intel cross-compile is both
+          # wasted work and the likely libsndfile failure. Build arm64 only.
           # --no-output-redirection: kit-next otherwise sends each lib's build
           # output to build.log, hiding the real error behind "<lib>: failed".
-          ./nix-macos.sh -p xcode26 --full --jobs=3 --no-output-redirection
+          ./nix-macos.sh -p xcode26 --full --disable-x86-64 --jobs=3 --no-output-redirection
           echo "OUT=$PWD/prebuilt/mnemovi-cli/aarch64" >>"$GITHUB_ENV"
 
       - name: Upload build.log on failure
